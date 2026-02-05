@@ -460,6 +460,10 @@
             drawLimit: 20000,
             playbackSpeed: 1.0,
             showAreaVelocity: false,
+
+            // Pan offsets (Added for Dragging)
+            offsetX: 0,
+            offsetY: 0,
         };
 
         class PhysicsEngine {
@@ -594,8 +598,9 @@
 
         class Coord {
             static worldToScreen(worldPos) {
-                const cx = AppState.width / 2;
-                const cy = AppState.height / 2;
+                // Incorporate Pan Offsets
+                const cx = (AppState.width / 2) + AppState.offsetX;
+                const cy = (AppState.height / 2) + AppState.offsetY;
                 const scale = AppState.pixelsPerMeter * AppState.zoom;
 
                 return {
@@ -639,18 +644,22 @@
                 this.clear(ctx);
                 const w = AppState.width;
                 const h = AppState.height;
-                const cx = w / 2;
-                const cy = h / 2;
+                // Respect Pan Offsets
+                const cx = (w / 2) + AppState.offsetX;
+                const cy = (h / 2) + AppState.offsetY;
 
                 ctx.strokeStyle = '#334155';
                 ctx.lineWidth = 1;
                 ctx.beginPath();
+                // Crosshair
                 ctx.moveTo(0, cy); ctx.lineTo(w, cy);
                 ctx.moveTo(cx, 0); ctx.lineTo(cx, h);
                 ctx.stroke();
 
                 const ppm = AppState.pixelsPerMeter * AppState.zoom;
-                const maxR = Math.max(w, h) / 2 / ppm;
+                // Ensure circle coverage even when panned
+                const maxDim = Math.max(w, h);
+                const maxR = (maxDim / ppm) * 2 + Math.abs(AppState.offsetX / ppm) + Math.abs(AppState.offsetY / ppm);
 
                 ctx.strokeStyle = 'rgba(56, 189, 248, 0.1)';
                 for (let r = 1; r < maxR; r++) {
@@ -687,8 +696,34 @@
                 }
 
                 const interval = AppState.strobeInterval;
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
 
+                // Restore Area Velocity on Redraw
+                if (AppState.showAreaVelocity) {
+                    ctx.fillStyle = 'rgba(236, 72, 153, 0.2)';
+                    ctx.strokeStyle = 'rgba(236, 72, 153, 0.4)';
+
+                    const maxIdx = AppState.stepIndex > 0 ? AppState.stepIndex : 0;
+
+                    for (let i = interval; i <= maxIdx; i += interval) {
+                        if (i > AppState.trajectory.length - 1) break;
+
+                        const prev = AppState.trajectory[i - interval];
+                        const curr = AppState.trajectory[i];
+                        const prevPos = Coord.worldToScreen(prev.pos);
+                        const currPos = Coord.worldToScreen(curr.pos);
+                        const origin = Coord.worldToScreen(Vector2D.zero());
+
+                        ctx.beginPath();
+                        ctx.moveTo(origin.x, origin.y);
+                        ctx.lineTo(prevPos.x, prevPos.y);
+                        ctx.lineTo(currPos.x, currPos.y);
+                        ctx.closePath();
+                        ctx.fill();
+                        ctx.stroke();
+                    }
+                }
+
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
                 for (let i = 0; i < AppState.trajectory.length; i++) {
                     if (i > limit) break;
                     if (i % interval === 0) {
@@ -718,7 +753,7 @@
                 ctx.fill();
                 ctx.shadowBlur = 0;
 
-                // Area Velocity
+                // Area Velocity (Animation Logic)
                 if (AppState.showAreaVelocity && AppState.stepIndex > 0) {
                     const interval = AppState.strobeInterval;
                     if (AppState.stepIndex % interval === 0) {
@@ -766,11 +801,26 @@
 
             drawAll() {
                 this.drawGraph(this.ctxX, AppState.trajectory, (s) => s.pos.mag(), '#38bdf8');
-                this.drawGraph(this.ctxE, AppState.trajectory, (s) => s.E, '#22c55e');
+
+                // User Request: Fix E-t graph scale to avoid amplifying small errors.
+                // We use max Kinetic Energy as a reference scale.
+                let maxK = 0;
+                // We can estimate max K roughly or scan. Since we scan for min/max anyway inside drawGraph, 
+                // we scan here for K. 
+                // Optimization: simple loop.
+                for (let i = 0; i < AppState.trajectory.length; i += 10) { // Sampling is enough for scale
+                    const s = AppState.trajectory[i];
+                    const v = s.vel.mag();
+                    const k = 0.5 * AppState.m * v * v;
+                    if (k > maxK) maxK = k;
+                }
+                const minEScale = maxK > 1e-9 ? maxK : 1.0;
+
+                this.drawGraph(this.ctxE, AppState.trajectory, (s) => s.E, '#22c55e', minEScale);
                 this.drawGraph(this.ctxL, AppState.trajectory, (s) => s.L, '#eab308');
             }
 
-            drawGraph(ctx, data, valueFn, color) {
+            drawGraph(ctx, data, valueFn, color, minRange = 0) {
                 const w = ctx.canvas.width;
                 const h = ctx.canvas.height;
                 ctx.clearRect(0, 0, w, h);
@@ -782,6 +832,13 @@
                     if (v < min) min = v;
                     if (v > max) max = v;
                 });
+
+                // Apply minimum range to prevent noise amplification
+                if ((max - min) < minRange) {
+                    const mid = (min + max) / 2;
+                    min = mid - minRange / 2;
+                    max = mid + minRange / 2;
+                }
 
                 if (Math.abs(max - min) < 1e-6) { max += 0.5; min -= 0.5; }
 
@@ -932,6 +989,11 @@
             let newZoom = ppm / 50.0;
             newZoom = Math.min(Math.max(newZoom, 0.1), 20.0);
 
+
+            // Reset panning on Autofit?
+            AppState.offsetX = 0;
+            AppState.offsetY = 0;
+
             AppState.zoom = newZoom;
 
             // Update UI
@@ -991,6 +1053,46 @@
             renderer.drawStaticPreview();
             if (AppState.isPlaying) renderer.drawCurrentFrame();
         }, { passive: false });
+
+        // Pan / Drag Implementation
+        let isDragging = false;
+        let lastMouseX = 0;
+        let lastMouseY = 0;
+
+        const orbitContainer = document.getElementById('orbit-container');
+        orbitContainer.style.cursor = 'grab';
+
+        orbitContainer.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            lastMouseX = e.clientX;
+            lastMouseY = e.clientY;
+            orbitContainer.style.cursor = 'grabbing';
+            e.preventDefault(); // Prevent text selection
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const dx = e.clientX - lastMouseX;
+            const dy = e.clientY - lastMouseY;
+            lastMouseX = e.clientX;
+            lastMouseY = e.clientY;
+
+            AppState.offsetX += dx;
+            AppState.offsetY += dy;
+
+            renderer.drawGrid();
+            renderer.drawStaticPreview();
+            if (AppState.isPlaying || AppState.stepIndex > 0) {
+                renderer.drawCurrentFrame();
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                orbitContainer.style.cursor = 'grab';
+            }
+        });
 
         document.getElementById('btn-attract').addEventListener('click', () => {
             AppState.isAttraction = true;
