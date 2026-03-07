@@ -800,15 +800,22 @@
             }
 
             drawAll() {
-                this.drawGraph(this.ctxX, AppState.trajectory, (s) => s.pos.mag(), '#38bdf8');
+                const rValues = AppState.trajectory.map((s) => s.pos.mag());
+                const initialR = AppState.initialPos.mag();
+                const observedMaxR = rValues.length > 0 ? Math.max(...rValues) : initialR;
+                const radialScaleMax = Math.max(initialR * 1.2, observedMaxR * 1.05, 1.0);
+
+                // r(t) は常に 0 始まりの共通スケールで描画し、
+                // 各条件で見かけの振幅が同じになる問題を避ける。
+                this.drawGraph(this.ctxX, AppState.trajectory, (s) => s.pos.mag(), '#38bdf8', {
+                    fixedMin: 0,
+                    fixedMax: radialScaleMax,
+                });
 
                 // User Request: Fix E-t graph scale to avoid amplifying small errors.
                 // We use max Kinetic Energy as a reference scale.
                 let maxK = 0;
-                // We can estimate max K roughly or scan. Since we scan for min/max anyway inside drawGraph, 
-                // we scan here for K. 
-                // Optimization: simple loop.
-                for (let i = 0; i < AppState.trajectory.length; i += 10) { // Sampling is enough for scale
+                for (let i = 0; i < AppState.trajectory.length; i += 10) {
                     const s = AppState.trajectory[i];
                     const v = s.vel.mag();
                     const k = 0.5 * AppState.m * v * v;
@@ -816,11 +823,13 @@
                 }
                 const minEScale = maxK > 1e-9 ? maxK : 1.0;
 
-                this.drawGraph(this.ctxE, AppState.trajectory, (s) => s.E, '#22c55e', minEScale);
+                this.drawGraph(this.ctxE, AppState.trajectory, (s) => s.E, '#22c55e', {
+                    minRange: minEScale,
+                });
                 this.drawGraph(this.ctxL, AppState.trajectory, (s) => s.L, '#eab308');
             }
 
-            drawGraph(ctx, data, valueFn, color, minRange = 0) {
+            drawGraph(ctx, data, valueFn, color, options = {}) {
                 const w = ctx.canvas.width;
                 const h = ctx.canvas.height;
                 ctx.clearRect(0, 0, w, h);
@@ -833,12 +842,17 @@
                     if (v > max) max = v;
                 });
 
+                const minRange = options.minRange ?? 0;
+
                 // Apply minimum range to prevent noise amplification
                 if ((max - min) < minRange) {
                     const mid = (min + max) / 2;
                     min = mid - minRange / 2;
                     max = mid + minRange / 2;
                 }
+
+                if (Number.isFinite(options.fixedMin)) min = options.fixedMin;
+                if (Number.isFinite(options.fixedMax)) max = options.fixedMax;
 
                 if (Math.abs(max - min) < 1e-6) { max += 0.5; min -= 0.5; }
 
