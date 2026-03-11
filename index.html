@@ -400,7 +400,7 @@
         </div>
         <div id="graph-container">
             <div class="graph-panel">
-                <div class="graph-label">距離 r(t)</div>
+                <div class="graph-label">位置 x(t)</div>
                 <canvas id="graph-x"></canvas>
             </div>
             <div class="graph-panel">
@@ -800,16 +800,16 @@
             }
 
             drawAll() {
-                const rValues = AppState.trajectory.map((s) => s.pos.mag());
-                const initialR = AppState.initialPos.mag();
-                const observedMaxR = rValues.length > 0 ? Math.max(...rValues) : initialR;
-                const radialScaleMax = Math.max(initialR * 1.2, observedMaxR * 1.05, 1.0);
+                const xValues = AppState.trajectory.map((s) => s.pos.x);
+                const initialAbsX = Math.abs(AppState.initialPos.x);
+                const observedMaxAbsX = xValues.length > 0 ? Math.max(...xValues.map((x) => Math.abs(x))) : initialAbsX;
+                const xScaleMax = Math.max(initialAbsX * 1.2, observedMaxAbsX * 1.05, 1.0);
 
-                // r(t) は常に 0 始まりの共通スケールで描画し、
-                // 各条件で見かけの振幅が同じになる問題を避ける。
-                this.drawGraph(this.ctxX, AppState.trajectory, (s) => s.pos.mag(), '#38bdf8', {
-                    fixedMin: 0,
-                    fixedMax: radialScaleMax,
+                // x(t) は y 軸中心の対称スケールで描画し、
+                // 条件間で x 振幅の絶対量を比較しやすくする。
+                this.drawGraph(this.ctxX, AppState.trajectory, (s) => s.pos.x, '#38bdf8', {
+                    fixedMin: -xScaleMax,
+                    fixedMax: xScaleMax,
                 });
 
                 // User Request: Fix E-t graph scale to avoid amplifying small errors.
